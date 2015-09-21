@@ -1,6 +1,6 @@
 use libc::{c_void, size_t, c_uint};
 use std::{ptr, slice};
-use std::marker::{PhantomData, PhantomFn};
+use std::marker::{PhantomData};
 
 use database::Database;
 use error::{Error, Result, lmdb_result};
@@ -9,7 +9,7 @@ use flags::WriteFlags;
 use transaction::Transaction;
 
 /// An LMDB cursor.
-pub trait Cursor<'txn> : PhantomFn<(), &'txn [u8]> {
+pub trait Cursor<'txn> {
     /// Returns a raw pointer to the underlying LMDB cursor.
     ///
     /// The caller **must** ensure that the pointer is not used after the lifetime of the cursor.
@@ -113,7 +113,6 @@ impl <'txn> Cursor<'txn> for RoCursor<'txn> {
 impl <'txn> !Sync for RoCursor<'txn> {}
 impl <'txn> !Send for RoCursor<'txn> {}
 
-#[unsafe_destructor]
 impl <'txn> Drop for RoCursor<'txn> {
     fn drop(&mut self) {
         unsafe { ffi::mdb_cursor_close(self.cursor) }
@@ -150,7 +149,6 @@ impl <'txn> Cursor<'txn> for RwCursor<'txn> {
 impl <'txn> !Sync for RwCursor<'txn> {}
 impl <'txn> !Send for RwCursor<'txn> {}
 
-#[unsafe_destructor]
 impl <'txn> Drop for RwCursor<'txn> {
     fn drop(&mut self) {
         unsafe { ffi::mdb_cursor_close(self.cursor) }

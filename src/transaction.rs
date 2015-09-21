@@ -1,6 +1,6 @@
 use libc::{c_uint, c_void, size_t};
 use std::{mem, ptr, slice};
-use std::marker::{PhantomData, PhantomFn} ;
+use std::marker::{PhantomData} ;
 
 use ffi;
 
@@ -13,7 +13,7 @@ use flags::{DatabaseFlags, EnvironmentFlags, WriteFlags};
 /// An LMDB transaction.
 ///
 /// All database operations require a transaction.
-pub trait Transaction<'env> : PhantomFn<(), &'env Environment> {
+pub trait Transaction<'env> {
 
     /// Returns a raw pointer to the underlying LMDB transaction.
     ///
@@ -86,7 +86,7 @@ pub trait TransactionExt<'env> : Transaction<'env> + Sized {
     }
 
     /// Open a new read-only cursor on the given database.
-    fn open_ro_cursor<'txn>(&'txn self, db: Database) -> Result<RoCursor<'txn>> {
+    fn open_ro_cursor(&'env self, db: Database) -> Result<RoCursor<'env>> {
         RoCursor::new(self, db)
     }
 
@@ -111,7 +111,6 @@ pub struct RoTransaction<'env> {
 impl <'env> !Sync for RoTransaction<'env> {}
 impl <'env> !Send for RoTransaction<'env> {}
 
-#[unsafe_destructor]
 impl <'env> Drop for RoTransaction<'env> {
     fn drop(&mut self) {
         unsafe { ffi::mdb_txn_abort(self.txn) }
@@ -166,7 +165,6 @@ pub struct InactiveTransaction<'env> {
     _marker: PhantomData<&'env ()>,
 }
 
-#[unsafe_destructor]
 impl <'env> Drop for InactiveTransaction<'env> {
     fn drop(&mut self) {
         unsafe { ffi::mdb_txn_abort(self.txn) }
@@ -198,7 +196,6 @@ pub struct RwTransaction<'env> {
 impl <'env> !Sync for RwTransaction<'env> {}
 impl <'env> !Send for RwTransaction<'env> {}
 
-#[unsafe_destructor]
 impl <'env> Drop for RwTransaction<'env> {
     fn drop(&mut self) {
         unsafe { ffi::mdb_txn_abort(self.txn) }
@@ -359,7 +356,7 @@ mod test {
     use rand::{Rng, XorShiftRng};
     use std::io::Write;
     use std::ptr;
-    use std::sync::{Arc, Barrier, Future};
+    use std::sync::{Arc, Barrier};
     use test::{Bencher, black_box};
 
     use tempdir::TempDir;
@@ -494,85 +491,6 @@ mod test {
         }
 
         assert_eq!(env.open_db(Some("test")), Err(Error::NotFound));
-    }
-
-    #[test]
-    fn test_concurrent_readers_single_writer() {
-        let dir = TempDir::new("test").unwrap();
-        let env: Arc<Environment> = Arc::new(Environment::new().open(dir.path()).unwrap());
-
-        let n = 10usize; // Number of concurrent readers
-        let barrier = Arc::new(Barrier::new(n + 1));
-        let mut futures: Vec<Future<bool>> = Vec::with_capacity(n);
-
-        let key = b"key";
-        let val = b"val";
-
-        for _ in 0..n {
-            let reader_env = env.clone();
-            let reader_barrier = barrier.clone();
-
-            futures.push(Future::spawn(move|| {
-                let db = reader_env.open_db(None).unwrap();
-                {
-                    let txn = reader_env.begin_ro_txn().unwrap();
-                    assert_eq!(txn.get(db, key), Err(Error::NotFound));
-                    txn.abort();
-                }
-                reader_barrier.wait();
-                reader_barrier.wait();
-                {
-                    let txn = reader_env.begin_ro_txn().unwrap();
-                    txn.get(db, key).unwrap() == val
-                }
-            }));
-        }
-
-        let db = env.open_db(None).unwrap();
-        let mut txn = env.begin_rw_txn().unwrap();
-        barrier.wait();
-        txn.put(db, key, val, WriteFlags::empty()).unwrap();
-        txn.commit().unwrap();
-        barrier.wait();
-
-        assert!(futures.iter_mut().all(|b| b.get()))
-    }
-
-    #[test]
-    fn test_concurrent_writers() {
-        let dir = TempDir::new("test").unwrap();
-        let env = Arc::new(Environment::new().open(dir.path()).unwrap());
-
-        let n = 10usize; // Number of concurrent writers
-        let mut futures: Vec<Future<bool>> = Vec::with_capacity(n);
-
-        let key = "key";
-        let val = "val";
-
-        for i in 0..n {
-            let writer_env = env.clone();
-
-            futures.push(Future::spawn(move|| {
-                let db = writer_env.open_db(None).unwrap();
-                let mut txn = writer_env.begin_rw_txn().unwrap();
-                txn.put(db,
-                        format!("{}{}", key, i).as_bytes(),
-                        format!("{}{}", val, i).as_bytes(),
-                        WriteFlags::empty())
-                    .unwrap();
-                txn.commit().is_ok()
-            }));
-        }
-        assert!(futures.iter_mut().all(|b| b.get()));
-
-        let db = env.open_db(None).unwrap();
-        let txn = env.begin_ro_txn().unwrap();
-
-        for i in 0..n {
-            assert_eq!(
-                format!("{}{}", val, i).as_bytes(),
-                txn.get(db, format!("{}{}", key, i).as_bytes()).unwrap());
-        }
     }
 
     #[bench]

@@ -1,5 +1,5 @@
 use libc::{c_uint, size_t, mode_t};
-use std::ffi::{AsOsStr, CString};
+use std::ffi::{OsString, CString};
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr;
